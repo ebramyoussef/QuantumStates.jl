@@ -52,7 +52,7 @@ function enumerate_states(state_type, QN_bounds)
         η = (; label = QN_bounds[:label], η...)
     end
 
-    enumerate_states(η, states, state_type, QNs, QN_bounds, 2)
+    enumerate_states(η, states, state_type, QNs, QN_bounds, 1)
 
     return states
 end

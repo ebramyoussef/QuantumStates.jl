@@ -213,7 +213,7 @@ function Hyperfine_Dipolar_c(state::HundsCaseA_LinearMolecule, state′::HundsCa
         sqrt( S * (S + 1) * (2S + 1) ) *
         sum(
             (-1)^q * 
-            wigner3j_(J, 1, J′, -P, q, P) *
+            wigner3j_(J, 1, J′, -P, q, P′) *
             sum(
                 wigner3j_(1, 2, 1, q′, 0, -q) *
                 wigner3j_(S, 1, S, -Σ, q′, Σ′)
