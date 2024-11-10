@@ -4,6 +4,7 @@ using UnitsToValue
 using StaticArrays
 using Parameters
 
+__precompile__(false)
 include("WignerSymbols_Simple.jl")
 include("Basis.jl")
 include("States.jl")
