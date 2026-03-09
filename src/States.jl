@@ -8,7 +8,7 @@ using PartialWaveFunctions
 
 using HalfIntegers
 using NamedTupleTools
-using LinearAlgebra
+# using LinearAlgebra
 using LoopVectorization
 using NamedTupleTools
 
@@ -162,11 +162,15 @@ import Base: +, -, *, /, ^
 #     (args...; kwargs...) -> f(args...; kwargs...) + c
 #     +(a, b) = +(b, a)`
 
+*(c, state::State) = State(0., state.basis, c .* state.coeffs, 0)
+
++(state::State, state′::State) = State(0., state.basis, state.coeffs .+ state′.coeffs, 0)
+
 δ(x,y) = ==(x,y)
 export δ
 
 struct ParameterList
-    param_dict::Dict{Symbol, Float64}
+    param_dict::Dict{Symbol, ComplexF64}
 end
 export ParameterList
 
@@ -246,7 +250,7 @@ export get_tdms_two_bases
 """
     `states` and `states′` must share the same basis.
 """
-function tdms_between_states!(d::Array{ComplexF64, 3}, basis_tdms::Array{ComplexF64, 3}, states::Vector{<:State}, states′::Vector{<:State})
+function tdms_between_states!(d::Array{T, 3}, basis_tdms::Array{T, 3}, states::Vector{<:State}, states′::Vector{<:State}) where T
     for i ∈ eachindex(states), j ∈ eachindex(states′)
         state  = states[i]
         state′ = states′[j]
@@ -273,7 +277,9 @@ function tdms_between_states(states::Vector{<:State}, states′::Vector{<:State}
         for p ∈ -1:1
             d[i,j,p+2] = 0.0
             for m ∈ eachindex(basis), n ∈ eachindex(basis′)
-                d[i,j,p+2] += conj(state.coeffs[m]) * state′.coeffs[n] * TDM(basis[m], basis′[n], p)
+                if norm(state.coeffs[m]) > 1e-6 && norm(state′.coeffs[n]) > 1e-6
+                    d[i,j,p+2] += conj(state.coeffs[m]) * state′.coeffs[n] * TDM(basis[m], basis′[n], p)
+                end
             end
         end
     end
@@ -282,7 +288,7 @@ end
 export tdms_between_states
 
 macro params(arg)
-    dict = Dict{Symbol, Float64}()
+    dict = Dict{Symbol, ComplexF64}()
     for x in arg.args
         if x isa Expr
             param_name = x.args[1]
@@ -305,7 +311,7 @@ import Base: getproperty
 function getproperty(p::ParameterList, s::Symbol)
     param_dict = getfield(p, :param_dict)
     if s ∈ keys(param_dict)
-        return getindex(param_dict, s)::Float64
+        return getindex(param_dict, s)
     else
         return getfield(p, s)
     end
@@ -313,7 +319,7 @@ end
 export getproperty
 
 import Base: setproperty!
-function setproperty!(p::ParameterList, s::Symbol, v::Float64)
+function setproperty!(p::ParameterList, s::Symbol, v)
     setindex!(getfield(p, :param_dict), v, s)
 end
 export setproperty!
@@ -425,6 +431,7 @@ function DiagonalOperator(state::BasisState, state′::BasisState)
 end
 export DiagonalOperator
 
+import LinearAlgebra: ⋅
 function calculate_state_overlaps!(states, states′, overlaps)
     for i ∈ eachindex(states)
         for j ∈ eachindex(states′)
@@ -478,7 +485,7 @@ function tracked_idxs!(overlaps, states, prev_states, tracked_idxs)
 end
 export tracked_idxs!
 
-function subspace(states::Vector{State{T}}, QN_bounds, threshold=0.01) where {T}
+function subspace(states::Vector{State{T}}, QN_bounds, threshold=0.01) where {T<:BasisState}
     subspace = State{T}[]
     subspace_idxs = Int64[]
     QNs = keys(QN_bounds)
@@ -507,6 +514,7 @@ end
 
 function subspace(basis::Vector{<:BasisState}, QN_bounds)
     subspace_basis = typeof(basis[1])[]
+    subspace_idxs = Int64[]
     QNs = keys(QN_bounds)
     add_to_subspace = ones(Bool, length(basis))
     for QN ∈ QNs
@@ -519,9 +527,10 @@ function subspace(basis::Vector{<:BasisState}, QN_bounds)
     for i ∈ eachindex(basis)
         if add_to_subspace[i]
             push!(subspace_basis, basis[i])
+            push!(subspace_idxs, i)
         end
     end
-    return subspace_basis
+    return subspace_idxs, subspace_basis
 end
 export subspace
 

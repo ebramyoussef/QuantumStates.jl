@@ -11,11 +11,10 @@ include("States.jl")
 include("Hamiltonian.jl")
 include("Transitions.jl")
 include("ProductState.jl")
+include("ProductHamiltonian.jl")
 
 # Various coupling schemes and other state definitions
-include("HundsCaseA.jl")
 include("HundsCaseA_LinearMolecule.jl")
-include("HundsCaseB.jl")
 include("HundsCaseB_LinearMolecule.jl")
 include("UncoupledCaseB.jl")
 include("AngularMomentumState.jl")

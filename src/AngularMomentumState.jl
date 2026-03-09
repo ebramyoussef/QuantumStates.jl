@@ -5,6 +5,7 @@ using HalfIntegers
 
 Base.@kwdef mutable struct AngularMomentumState <: BasisState
     E::Float64 = 0.0
+    label::String = ""
     N::HalfInt
     M::HalfInt
     constraints = (
@@ -18,7 +19,7 @@ function unpack(state::AngularMomentumState)
 end
 export unpack
 
-function I(state::AngularMomentumState, state′::AngularMomentumState)
+function Identity(state::AngularMomentumState, state′::AngularMomentumState)
     N,  M  = unpack(state)
     N′, M′ = unpack(state′)
     if ~δ(N, N′) || ~δ(M, M′)
@@ -27,7 +28,7 @@ function I(state::AngularMomentumState, state′::AngularMomentumState)
         return 1.0
     end
 end
-export I
+export Identity
 
 function Rotation(state::AngularMomentumState, state′::AngularMomentumState)
     N,  M  = unpack(state)
@@ -39,7 +40,7 @@ export Rotation
 function TDM(state::AngularMomentumState, state′::AngularMomentumState, p::Int64)
     N,  M  = unpack(state)
     N′, M′ = unpack(state′)
-    return (
+    return (state.label != state′.label) * (
         (-1)^p * (-1)^(N - M) * wigner3j(N, 1, N′, -M, -p, M′) * sqrt(2N + 1)
     )
 end
@@ -75,3 +76,14 @@ export Zeeman
 #     δ(state, state′) * state.E
 # end
 # export H
+
+function overlap(state::AngularMomentumState, state′::AngularMomentumState)
+    N, M = state.N, state.M
+    N′, M′ = state′.N, state′.M
+    overlap = zero(Float64)
+    if ~δ(M, M′) || ~δ(N, N′)
+    else
+        overlap += 1.0
+    end
+    return overlap
+end

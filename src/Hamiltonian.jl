@@ -15,12 +15,12 @@ export Hamiltonian
 """
     Combines a list of Hamiltonians into a single Hamiltonian object.
 """
-mutable struct CombinedHamiltonian{T<:BasisState, F}
-    Hs::Vector{Hamiltonian{T}}
-    basis::Vector{T}
+mutable struct CombinedHamiltonian{T1, T2<:BasisState, F}
+    Hs::Vector{T1}
+    basis::Vector{T2}
     operator::Expr
     parameters::ParameterList
-    states::Vector{State{T}}
+    states::Vector{State{T2}}
     operators::F
     matrix::Matrix{ComplexF64}
     tdms::Array{ComplexF64, 3}
@@ -32,7 +32,7 @@ function CombinedHamiltonian(Hs)
     Hs′ = [deepcopy(H) for H ∈ Hs]
     basis′ = vcat((H.basis for H ∈ Hs′)...)
     operator′ = Expr(:nothing)
-    parameters′ = ParameterList(Dict{Symbol, Float64}())
+    parameters′ = ParameterList(Dict{Symbol, ComplexF64}())
     states′ = vcat((convert_basis(H.states, basis′) for H ∈ Hs′)...)
     operators′ = unpack_operator(operator′, basis′)
     matrix′ = create_block_diagonal_matrix((H.matrix for H ∈ Hs′))
@@ -122,7 +122,7 @@ export extend_basis!
 function subspace(H::Hamiltonian, QN_bounds)
 
     # update states
-    states′ = subspace(H.states, QN_bounds)[2]
+    states′_idxs, states′ = subspace(H.states, QN_bounds)
     H.states = states′
 
     # get basis states to keep
@@ -144,6 +144,10 @@ function subspace(H::Hamiltonian, QN_bounds)
         H.states[i].basis = basis′
         H.states[i].coeffs = H.states[i].coeffs[basis_states_to_keep]
     end
+
+    # update tdms
+    H.basis_tdms = H.basis_tdms[basis_states_to_keep,basis_states_to_keep,:]
+    H.tdms = H.tdms[states′_idxs,states′_idxs,:]
     
     # update matrices
     H.matrix = H.matrix[basis_states_to_keep, basis_states_to_keep]
@@ -157,13 +161,23 @@ export subspace
 # subspace(H::Hamiltonian, basis_idxs) = Hamiltonian(H.basis[basis_idxs], H.operator, H.parameters)
 
 function update_basis_tdms!(H::Union{Hamiltonian, CombinedHamiltonian})
+    # for i ∈ eachindex(H.basis)
+    #     for j ∈ (i+1):length(H.basis)
+    #         bstate = H.basis[i]
+    #         bstate′ = H.basis[j]
+    #         for p ∈ -1:1
+    #             H.basis_tdms[i,j,p+2] = TDM(bstate, bstate′, p)
+    #             # H.basis_tdms[j,i,p+2] = conj(H.basis_tdms[i,j,p+2])
+    #         end
+    #     end
+    # end
     for i ∈ eachindex(H.basis)
-        for j ∈ (i+1):length(H.basis)
+        for j ∈ eachindex(H.basis)
             bstate = H.basis[i]
             bstate′ = H.basis[j]
             for p ∈ -1:1
                 H.basis_tdms[i,j,p+2] = TDM(bstate, bstate′, p)
-                H.basis_tdms[j,i,p+2] = conj(H.basis_tdms[i,j,p+2])
+                # H.basis_tdms[j,i,p+2] = conj(H.basis_tdms[i,j,p+2])
             end
         end
     end
@@ -186,17 +200,30 @@ export update_basis_tdms_m!
 
 # Updated 7/15/2023
 function update_tdms!(H::Union{Hamiltonian, CombinedHamiltonian}, idxs=eachindex(H.states))
-    for i ∈ idxs, j ∈ idxs
-        if j > i
+    # for i ∈ idxs, j ∈ idxs
+    #     if j > i
+    #         state = H.states[i]
+    #         state′ = H.states[j]
+    #         for p ∈ -1:1
+    #             H.tdms[i,j,p+2] = H.tdms[j,i,p+2] = 0.0
+    #             for m ∈ eachindex(H.basis), n ∈ eachindex(H.basis)
+    #                 basis_tdm = H.basis_tdms[m,n,p+2]
+    #                 H.tdms[i,j,p+2] += conj(state.coeffs[m]) * state′.coeffs[n] * basis_tdm
+    #             end
+    #             H.tdms[j,i,p+2] = conj(H.tdms[i,j,p+2])
+    #         end
+    #     end
+    # end
+    for i ∈ idxs
+        for j ∈ idxs
             state = H.states[i]
             state′ = H.states[j]
             for p ∈ -1:1
-                H.tdms[i,j,p+2] = H.tdms[j,i,p+2] = 0.0
+                H.tdms[i,j,p+2] = 0.0
                 for m ∈ eachindex(H.basis), n ∈ eachindex(H.basis)
                     basis_tdm = H.basis_tdms[m,n,p+2]
                     H.tdms[i,j,p+2] += conj(state.coeffs[m]) * state′.coeffs[n] * basis_tdm
                 end
-                H.tdms[j,i,p+2] = conj(H.tdms[i,j,p+2])
             end
         end
     end
@@ -316,6 +343,53 @@ export add_operator_matrix!
 end
 
 """
+Functions to make a matrix from an operator.
+"""
+function create_matrix_for_states(operator_matrix, states)
+    matrix = zeros(ComplexF64, length(states), length(states))
+    for (i, state) in enumerate(states)
+        for (j, state′) in enumerate(states)
+            for (k, basis_state) in enumerate(state.basis)
+                for (l, basis_state′) in enumerate(state′.basis)
+                    matrix[i,j] += conj(state.coeffs[k]) * state′.coeffs[l] * operator_matrix[k,l]
+                end
+            end
+        end
+    end
+    return matrix
+end
+export create_matrix_for_states
+
+"""
+Make an operator apply to "state" rather than "basis state".
+"""
+function extend_operator(operator::T, state, state′, args...) where {T}
+    val = zero(ComplexF64)
+    for (i, basis_state) in enumerate(state.basis)
+        for (j, basis_state′) in enumerate(state′.basis)
+            val += conj(state.coeffs[i]) * state′.coeffs[j] * operator(basis_state, basis_state′, args...)
+        end
+    end
+    return val
+end
+export extend_operator
+
+function operator_to_matrix(A, states)
+    """
+    Write an operator as a matrix in basis {states}.
+    """
+    n_states = length(states)
+    A_mat = zeros(ComplexF64, n_states, n_states)
+    for i in 1:n_states
+        for j in 1:n_states
+            A_mat[i,j] = extend_operator(A, states[i], states[j])
+        end
+    end
+    return A_mat
+end
+export operator_to_matrix
+
+"""
     full_evaluate!(H::Hamiltonian)
 
     Additionally reevaluates the matrix elements of all operators in the Hamiltonian. 
@@ -352,7 +426,8 @@ function evaluate!(H::CombinedHamiltonian)
     return nothing
 end
 export evaluate!
-        
+
+import LinearAlgebra: Hermitian, eigen, eigvals!
 function solve!(H, idxs=1:length(H.states))
     es, vs = eigen(Hermitian(H.matrix), idxs)
     for i ∈ idxs
@@ -398,11 +473,6 @@ export solve_eigvals_only!
 #     M_states::Array{Float64, 2} = reduce(vcat, [state.coeffs for state in states]')
 end
 export Hamiltonian_Old
-
-function energies(H::Hamiltonian_Old)
-    return [state.E for state ∈ H.states]
-end
-export energies
 
 # import LinearAlgebra: mul!
 # function mul!(H_new, H::Hamiltonian, M)
@@ -692,8 +762,9 @@ function single_scan(H, H_func!, scan_values, channel, n_params, output_type, ou
     end
     dict, dict_state_idxs
 end
+export single_scan
 
-function scan_parameters_v2(H, scan_values::T, iterator::F1, H_func!::F2, output_func::F3; n_threads=Threads.nthreads()) where {T,F1,F2,F3}
+function scan_parameters_v2(H, scan_values::T, iterator::F1, H_func!::F2, output_func::F3; workers=workers()) where {T,F1,F2,F3}
     scan_iterator = iterator(scan_values...)
     
     n_values = length(scan_iterator)
@@ -704,90 +775,17 @@ function scan_parameters_v2(H, scan_values::T, iterator::F1, H_func!::F2, output
     prog_bar = Progress(n_values)
     channel = RemoteChannel(() -> Channel{Int}(n_values))
 
+    # prog_bar = Progress(n_values)
+    # channel = RemoteChannel(() -> Channel{Bool}(), 1)
+
     # Multi-threading settings
-    batch_size = cld(n_values, n_threads)
-    remainder = n_values - batch_size * n_threads
+    batch_size = cld(n_values, length(workers))
+    remainder = n_values - batch_size * length(workers)
     partitions = Iterators.partition(scan_iterator, batch_size)
 
-    tasks = Vector{Future}(undef, n_threads)
+    tasks = Vector{Future}(undef, length(workers))
 
-    # for (i, scan_values_partition) ∈ enumerate(partitions)
-
-    #     tasks[i] = @spawnat i+1 begin
-
-    #         _H = deepcopy(H_copy)
-    #         tracked_idxs = collect(1:length(_H.states))
-    #         overlaps = zeros(Float64, length(_H.states), length(_H.states))
-    #         prev_states = deepcopy(_H.states)
-    #         dict = Dict{NTuple{n_params, Float64}, output_type}()
-    #         dict_state_idxs = Dict{NTuple{n_params, Float64}, Vector{Int64}}()
-    #         state_idxs = collect(1:length(_H.states))
-
-    #         for scan_value ∈ scan_values_partition
-
-    #             H_func!(_H, scan_value)
-    #             calculate_state_overlaps!(_H.states, prev_states, overlaps)
-    #             tracked_idxs!(overlaps, _H.states, prev_states, tracked_idxs)
-    #             _H.states .= _H.states[tracked_idxs]
-    
-    #             for j ∈ eachindex(_H.states)
-    #                 prev_states[j].E = _H.states[j].E
-    #                 prev_states[j].coeffs .= _H.states[j].coeffs
-    #             end
-
-    #             dict[scan_value] = output_func(_H)
-    #             dict_state_idxs[scan_value] = deepcopy(state_idxs[tracked_idxs])
-                
-    #         end
-    #         dict, dict_state_idxs
-    #     end
-    # end
-
-    # @sync begin
-    #     @async while take!(channel)
-    #         next!(prog_bar)
-    #     end
-
-    #     @async begin
-    #         for (i, scan_values_partition) ∈ enumerate(partitions)
-
-    #             tasks[i] = @spawnat i+1 begin
-
-    #                 _H = deepcopy(H_copy)
-    #                 tracked_idxs = collect(1:length(_H.states))
-    #                 overlaps = zeros(Float64, length(_H.states), length(_H.states))
-    #                 prev_states = deepcopy(_H.states)
-    #                 dict = Dict{NTuple{n_params, Float64}, output_type}()
-    #                 dict_state_idxs = Dict{NTuple{n_params, Float64}, Vector{Int64}}()
-    #                 state_idxs = collect(1:length(_H.states))
-
-    #                 for scan_value ∈ scan_values_partition
-
-    #                     H_func!(_H, scan_value)
-    #                     calculate_state_overlaps!(_H.states, prev_states, overlaps)
-    #                     tracked_idxs!(overlaps, _H.states, prev_states, tracked_idxs)
-    #                     _H.states .= _H.states[tracked_idxs]
-            
-    #                     for j ∈ eachindex(_H.states)
-    #                         prev_states[j].E = _H.states[j].E
-    #                         prev_states[j].coeffs .= _H.states[j].coeffs
-    #                     end
-    #                     # end
-    #                     # saved_values[i,:] = output_func(H)
-    #                     dict[scan_value] = output_func(_H)
-    #                     # state_idxs .= state_idxs[tracked_idxs]
-    #                     dict_state_idxs[scan_value] = deepcopy(state_idxs[tracked_idxs])
-    #                     put!(channel, true)
-                        
-    #                 end
-    #                 # put!(channel, true)
-    #                 dict, dict_state_idxs
-    #             end
-    #             # full_dict = merge(full_dict, fetch(task))
-    #         end
-    #         put!(channel, false)
-    #     end
-    # end
+    scan_data = []
 
     @sync begin
         @async begin
@@ -796,56 +794,28 @@ function scan_parameters_v2(H, scan_values::T, iterator::F1, H_func!::F2, output
                 tasksdone += take!(channel)
                 update!(prog_bar, tasksdone)
             end
+            # while take!(channel)
+            #     next!(prog_bar)
+            # end
         end        
 
         @async begin
             for (i, scan_values_partition) ∈ enumerate(partitions)
-                tasks[i] = remotecall(single_scan, i+1, deepcopy(H), H_func!, scan_values_partition, channel, n_params, output_type, output_func)
+                pid = workers[i]
+                # tasks[pid] = remotecall(single_scan, pid, H, H_func!, scan_values_partition, channel, n_params, output_type, output_func)
+                tasks[i] = @spawnat pid single_scan(H, H_func!, scan_values_partition, channel, n_params, output_type, output_func)
+                # data = single_scan(H, H_func!, scan_values_partition, channel, n_params, output_type, output_func)
+                # push!(scan_data, data)
             end
-            put!(channel, false)
+            # Returned results are a vector of tuples holding dictionaries (with energies) and vectors of state indices
         end
+        put!(channel, false)
     end
-
-    # @sync begin
-    #     @async while take!(channel)
-    #         next!(prog_bar)
-    #     end
-
-    #     @async begin
-    #         for (i, scan_values_partition) ∈ enumerate(partitions)
-
-    #             tasks[i] = remotecall(single_scan, i+1, H_copy, H_func!, scan_values_partition, channel, n_params, output_type, output_func)
-
-    #         end
-    #         put!(channel, false)
-    #     end
-    # end
-
-    # Returned results are a vector of tuples holding dictionaries (with energies) and vectors of state indices
     scan_data = fetch.(tasks)
     # print([x[1] for x ∈ scan_data][2])
     full_dict = merge([x[1] for x ∈ scan_data]...)
     full_dict_tracked_idxs =  merge([x[2] for x ∈ scan_data]...)
 
-    # for (i, scan_values) ∈ enumerate(scan_iterator)
-        
-    #     _H = deepcopy(H)
-    #     H_func!(H, scan_values, i)
-        
-    #     # Ensure that state indices are correctly tracked, i.e., crossing states are not swapped
-    #     if i != 1
-    #         calculate_state_overlaps!(H.states, prev_states, overlaps)
-    #         tracked_idxs!(overlaps, tracked_idxs)
-    #         H.states = H.states[tracked_idxs]
-
-    #         for j ∈ eachindex(H.states)
-    #             prev_states[j].coeffs .= H.states[j].coeffs
-    #         end
-    #     end
-    #     # saved_values[i,:] = output_func(H)
-    #     dict[scan_values] = output_func(H)
-    #     next!(prog_bar)
-    # end
     return sort(full_dict), sort(full_dict_tracked_idxs)
     
 end
